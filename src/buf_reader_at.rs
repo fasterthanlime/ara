@@ -32,8 +32,8 @@ pub struct Stats {
 }
 
 pub struct BufReaderAtOpts {
-    /// Cached block size
-    page_size: u64,
+    /// Length of a single cached page
+    page_len: u64,
     /// Capacity of page cache
     max_cached_pages: usize,
 }
@@ -42,7 +42,7 @@ impl Default for BufReaderAtOpts {
     fn default() -> Self {
         Self {
             // 256 KiB
-            page_size: 256 * 1024,
+            page_len: 256 * 1024,
             // 32 * 256 KiB = MiB
             max_cached_pages: 32,
         }
@@ -62,8 +62,8 @@ where
         Self {
             cache: Mutex::new(LruCache::with_capacity(opts.max_cached_pages)),
             layout: PageLayout {
-                resource_size: inner.size(),
-                page_size: opts.page_size,
+                resource_len: inner.len(),
+                page_len: opts.page_len,
             },
             inner,
             stats: Default::default(),
@@ -91,39 +91,42 @@ where
             offset,
             page_info
         );
-        let read_size = std::cmp::min(buf.len(), page_info.remaining() as usize);
+        let read_len = std::cmp::min(buf.len(), page_info.remaining() as usize);
 
         let mut cache = self.cache.lock().await;
         if let Some(page_bytes) = cache.get(&page_info.number) {
             self.stats.hits.fetch_add(1, Ordering::SeqCst);
-            tracing::trace!("  (cached read of size {})", read_size);
-            for i in 0..read_size {
+            for i in 0..read_len {
                 buf[i] = page_bytes[page_info.offset_in_page as usize + i];
             }
-            return Ok(read_size);
         } else {
             self.stats.miss.fetch_add(1, Ordering::SeqCst);
-            let mut page_bytes = BytesMut::with_capacity(page_info.size as _);
+            let mut page_bytes = BytesMut::with_capacity(page_info.len as _);
             unsafe {
-                page_bytes.set_len(page_info.size as _);
+                page_bytes.set_len(page_info.len as _);
             }
-            tracing::trace!("  (fetching page {})", page_info.number);
+            tracing::trace!(
+                ">> fetching page {} ({} bytes)",
+                page_info.number,
+                page_info.len
+            );
             self.inner
                 .read_at_exact(page_info.page_start(), page_bytes.as_mut())
                 .await?;
 
-            for i in 0..read_size {
+            for i in 0..read_len {
                 buf[i] = page_bytes[page_info.offset_in_page as usize + i];
             }
 
             cache.insert(page_info.number, page_bytes.into());
-            tracing::trace!("  (cache size: {})", cache.len());
-            return Ok(read_size);
+            tracing::trace!("  (cached pages: {})", cache.len());
         }
+
+        Ok(read_len)
     }
 
-    fn size(&self) -> u64 {
-        self.layout.resource_size
+    fn len(&self) -> u64 {
+        self.layout.resource_len
     }
 }
 
@@ -133,42 +136,42 @@ fn make_io_error<E: std::error::Error + Send + Sync + 'static>(e: E) -> io::Erro
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PageLayout {
-    resource_size: u64,
-    page_size: u64,
+    resource_len: u64,
+    page_len: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
 enum PageError {
-    #[error("out of bounds: requested offset {requested} > resource size {resource_size}")]
-    OutOfBounds { requested: u64, resource_size: u64 },
+    #[error("out of bounds: requested offset {requested} > resource length {resource_len}")]
+    OutOfBounds { requested: u64, resource_len: u64 },
 }
 
 impl PageLayout {
     /// Returns information for the page at a given offset, or an error
     /// if out of bounds.
     fn page_at(self, offset: u64) -> Result<PageInfo, PageError> {
-        if offset > self.resource_size {
+        if offset > self.resource_len {
             return Err(PageError::OutOfBounds {
                 requested: offset,
-                resource_size: self.resource_size,
+                resource_len: self.resource_len,
             });
         }
 
-        let number = offset / self.page_size;
-        let offset_in_page = offset - number * self.page_size;
+        let number = offset / self.page_len;
+        let offset_in_page = offset - number * self.page_len;
 
-        let end = (number + 1) * self.page_size;
-        let size = if end > self.resource_size {
-            let page_start = number * self.page_size;
-            self.resource_size - page_start
+        let end = (number + 1) * self.page_len;
+        let len = if end > self.resource_len {
+            let page_start = number * self.page_len;
+            self.resource_len - page_start
         } else {
-            self.page_size
+            self.page_len
         };
 
         Ok(PageInfo {
             number,
             offset_in_page,
-            size,
+            len,
             layout: self,
         })
     }
@@ -185,10 +188,10 @@ struct PageInfo {
     /// page 1 with offset 10 is byte 1034.
     offset_in_page: u64,
 
-    /// Actual size of this page, may be less than `max_page_size`
-    /// if this is the last page and the size of the resource
-    /// is not a multiple of `max_page_size`.
-    size: u64,
+    /// Actual length of this page, may be less than `max_page_len`
+    /// if this is the last page and the length of the resource
+    /// is not a multiple of `max_page_len`.
+    len: u64,
 
     /// How the resource is divided into pages
     layout: PageLayout,
@@ -199,13 +202,13 @@ impl PageInfo {
     /// For example, page 0 with offset 1014 has 10 bytes remaining
     /// (for 1024-byte pages).
     fn remaining(self) -> u64 {
-        self.size - self.offset_in_page
+        self.len - self.offset_in_page
     }
 
     /// Returns the offset at which this page starts in the resouce
     /// Page 2 starts at offset 2048 (for 1024-byte pages).
     fn page_start(self) -> u64 {
-        self.number * self.layout.page_size
+        self.number * self.layout.page_len
     }
 }
 
@@ -217,8 +220,8 @@ mod layout_tests {
     #[test]
     fn test_page_layout() {
         let layout = PageLayout {
-            page_size: 100,
-            resource_size: 328,
+            page_len: 100,
+            resource_len: 328,
         };
 
         assert!(layout.page_at(0).is_ok());
@@ -233,7 +236,7 @@ mod layout_tests {
             PageInfo {
                 number: 0,
                 offset_in_page: 0,
-                size: 100,
+                len: 100,
                 layout,
             }
         );
@@ -243,7 +246,7 @@ mod layout_tests {
             PageInfo {
                 number: 0,
                 offset_in_page: 99,
-                size: 100,
+                len: 100,
                 layout,
             }
         );
@@ -253,7 +256,7 @@ mod layout_tests {
             PageInfo {
                 number: 1,
                 offset_in_page: 0,
-                size: 100,
+                len: 100,
                 layout,
             }
         );
@@ -263,7 +266,7 @@ mod layout_tests {
             PageInfo {
                 number: 1,
                 offset_in_page: 50,
-                size: 100,
+                len: 100,
                 layout,
             }
         );
@@ -273,7 +276,7 @@ mod layout_tests {
             PageInfo {
                 number: 1,
                 offset_in_page: 99,
-                size: 100,
+                len: 100,
                 layout,
             }
         );
@@ -283,7 +286,7 @@ mod layout_tests {
             PageInfo {
                 number: 3,
                 offset_in_page: 0,
-                size: 28,
+                len: 28,
                 layout,
             }
         );
@@ -293,7 +296,7 @@ mod layout_tests {
             PageInfo {
                 number: 3,
                 offset_in_page: 28,
-                size: 28,
+                len: 28,
                 layout,
             }
         );
@@ -345,28 +348,28 @@ mod buf_reader_at_tests {
             &mem_read,
             BufReaderAtOpts {
                 max_cached_pages: 8,
-                page_size: 2048,
+                page_len: 2048,
             },
         );
 
-        let max_read_size: u32 = 1024;
-        let mut buf_expect: Vec<u8> = Vec::with_capacity(max_read_size as _);
-        let mut buf_actual: Vec<u8> = Vec::with_capacity(max_read_size as _);
+        let max_read_len: u32 = 1024;
+        let mut buf_expect: Vec<u8> = Vec::with_capacity(max_read_len as _);
+        let mut buf_actual: Vec<u8> = Vec::with_capacity(max_read_len as _);
 
         let num_reads = 200;
         for _ in 0..num_reads {
-            let offset = rand.rand_range(0..v.len() as u32 - max_read_size) as u64;
-            let read_size = rand.rand_range(0..max_read_size) as usize;
+            let offset = rand.rand_range(0..v.len() as u32 - max_read_len) as u64;
+            let read_len = rand.rand_range(0..max_read_len) as usize;
 
-            unsafe { buf_expect.set_len(read_size) };
+            unsafe { buf_expect.set_len(read_len) };
             mem_read
-                .read_at_exact(offset, &mut buf_expect[..read_size])
+                .read_at_exact(offset, &mut buf_expect[..read_len])
                 .await
                 .unwrap();
 
-            unsafe { buf_actual.set_len(read_size) };
+            unsafe { buf_actual.set_len(read_len) };
             buf_read
-                .read_at_exact(offset, &mut buf_actual[..read_size])
+                .read_at_exact(offset, &mut buf_actual[..read_len])
                 .await
                 .unwrap();
 
@@ -413,13 +416,14 @@ mod buf_reader_at_tests {
             let range = offset..std::cmp::min(offset + buf.len(), self.data.len());
             let read_len = range.end - range.start;
 
-            for i in 0..read_len {
-                buf[i] = self.data[offset + i];
-            }
+            let dst = &mut buf[..read_len];
+            let src = &self.data[offset..offset + read_len];
+            dst.copy_from_slice(src);
+
             Ok(read_len)
         }
 
-        fn size(&self) -> u64 {
+        fn len(&self) -> u64 {
             self.data.len() as u64
         }
     }

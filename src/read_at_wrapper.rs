@@ -26,7 +26,7 @@ where
 {
     heads: Mutex<VecDeque<Head<Source::Reader>>>,
     source: Arc<Source>,
-    size: u64,
+    len: u64,
     max_heads: usize,
 }
 
@@ -38,7 +38,7 @@ where
 
     pub fn new(
         source: Arc<Source>,
-        size: u64,
+        len: u64,
         mut initial_head: Option<(u64, Source::Reader)>,
     ) -> Self {
         let mut heads: VecDeque<Head<Source::Reader>> = Default::default();
@@ -51,7 +51,7 @@ where
         Self {
             heads: Mutex::new(heads),
             source,
-            size,
+            len,
             max_heads: Self::DEFAULT_MAX_HEADS,
         }
     }
@@ -114,8 +114,8 @@ where
         Ok(res)
     }
 
-    fn size(&self) -> u64 {
-        self.size
+    fn len(&self) -> u64 {
+        self.len
     }
 }
 

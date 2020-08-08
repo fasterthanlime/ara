@@ -5,7 +5,7 @@ pub mod buf_reader_at;
 pub mod range_reader;
 pub mod read_at_wrapper;
 
-/// Provides size and asynchronous random access to a resource
+/// Provides length and asynchronous random access to a resource
 #[async_trait(?Send)]
 pub trait ReadAt {
     /// Read bytes from resource, starting at `offset`, into `buf`
@@ -21,8 +21,13 @@ pub trait ReadAt {
         Ok(())
     }
 
-    /// Returns the size of the resource
-    fn size(&self) -> u64;
+    /// Returns the length of the resource, in bytes
+    fn len(&self) -> u64;
+
+    /// Returns true if that resource is empty (has a length of 0)
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 #[async_trait(?Send)]
@@ -34,8 +39,8 @@ where
         Ok((*self).read_at(offset, buf).await?)
     }
 
-    fn size(&self) -> u64 {
-        (*self).size()
+    fn len(&self) -> u64 {
+        (*self).len()
     }
 }
 
@@ -48,8 +53,8 @@ where
         Ok(self.as_ref().read_at(offset, buf).await?)
     }
 
-    fn size(&self) -> u64 {
-        self.as_ref().size()
+    fn len(&self) -> u64 {
+        self.as_ref().len()
     }
 }
 

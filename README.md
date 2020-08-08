@@ -2,7 +2,7 @@
 
 The `ara` crate provides traits for async random access I/O.
 
-The `ReadAt` trait provides both an `u64` size, and an async `read_at`
+The `ReadAt` trait provides both an `u64` length, and an async `read_at`
 method, thanks to `async-trait`. It is intended to be implemented for
 anything from in-memory buffers, to local files, to remote resources
 acessed over protocols like HTTP, FTP, etc.

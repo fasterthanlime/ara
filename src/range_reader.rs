@@ -17,11 +17,13 @@ where
     state: State<R>,
 }
 
+type PendingFut<R> = Pin<Box<dyn Future<Output = (R, Vec<u8>, io::Result<usize>)> + 'static>>;
+
 enum State<R> {
     /// Waiting for read
     Idle((R, Vec<u8>)),
     /// Performing read
-    Pending(Pin<Box<dyn Future<Output = (R, Vec<u8>, io::Result<usize>)> + 'static>>),
+    Pending(PendingFut<R>),
     /// Internal state for `poll_read` implementation
     Transitional,
 }
@@ -41,18 +43,20 @@ impl<R> RangeReader<R>
 where
     R: ReadAt + Unpin + 'static,
 {
-    pub const DEFAULT_BUF_SIZE: usize = 1024;
+    pub const DEFAULT_BUF_LEN: usize = 1024;
 
+    /// Create a new instance with the default buffer length (1 KiB)
     pub fn new(inner: R, range: Range<u64>) -> Result<Self, Error> {
-        Self::with_buf_size(inner, range, Self::DEFAULT_BUF_SIZE)
+        Self::with_buf_len(inner, range, Self::DEFAULT_BUF_LEN)
     }
 
-    pub fn with_buf_size(inner: R, range: Range<u64>, bufsize: usize) -> Result<Self, Error> {
+    /// Create a new instance with a specified buffer length
+    pub fn with_buf_len(inner: R, range: Range<u64>, buf_len: usize) -> Result<Self, Error> {
         if range.start > range.end {
             return Err(Error::BackwardsRange(range));
         }
 
-        let resource_range = 0..inner.size();
+        let resource_range = 0..inner.len();
         if !range.is_subset_of(&resource_range) {
             return Err(Error::OutOfRange {
                 range,
@@ -60,7 +64,7 @@ where
             });
         }
 
-        let buf = vec![0u8; bufsize];
+        let buf = vec![0u8; buf_len];
         Ok(Self {
             state: State::Idle((inner, buf)),
             range,
@@ -109,9 +113,11 @@ where
             Poll::Ready((inner, internal_buf, res)) => {
                 if let Ok(bytes_read) = &res {
                     let bytes_read = *bytes_read;
-                    for i in 0..bytes_read {
-                        buf[i] = internal_buf[i]
-                    }
+
+                    let src = &internal_buf[..bytes_read];
+                    let dst = &mut buf[..bytes_read];
+                    dst.copy_from_slice(src);
+
                     self.range.start += bytes_read as u64;
                 }
                 self.state = State::Idle((inner, internal_buf));
