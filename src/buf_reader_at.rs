@@ -31,14 +31,16 @@ pub struct Stats {
     pub miss: usize,
 }
 
-pub struct BufReaderAtOpts {
+/// Buffering options
+#[derive(Clone, Debug)]
+pub struct Opts {
     /// Length of a single cached page
     page_len: u64,
     /// Capacity of page cache
     max_cached_pages: usize,
 }
 
-impl Default for BufReaderAtOpts {
+impl Default for Opts {
     fn default() -> Self {
         Self {
             // 256 KiB
@@ -58,7 +60,7 @@ where
         Self::with_opts(inner, Default::default())
     }
 
-    pub fn with_opts(inner: R, opts: BufReaderAtOpts) -> Self {
+    pub fn with_opts(inner: R, opts: Opts) -> Self {
         Self {
             cache: Mutex::new(LruCache::with_capacity(opts.max_cached_pages)),
             layout: PageLayout {
@@ -305,7 +307,7 @@ mod layout_tests {
 
 #[cfg(test)]
 mod buf_reader_at_tests {
-    use super::{make_io_error, BufReaderAt, BufReaderAtOpts};
+    use super::{make_io_error, BufReaderAt, Opts};
     use crate::ReadAt;
     use async_trait::async_trait;
     use color_eyre::eyre;
@@ -346,7 +348,7 @@ mod buf_reader_at_tests {
         let mem_read = MemReader { data: &v[..] };
         let buf_read = BufReaderAt::with_opts(
             &mem_read,
-            BufReaderAtOpts {
+            Opts {
                 max_cached_pages: 8,
                 page_len: 2048,
             },
