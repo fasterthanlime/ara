@@ -14,11 +14,22 @@ pub trait ReadAt {
     /// Reads exactly `buf`, starting at `offset`
     async fn read_at_exact(&self, mut offset: u64, mut buf: &mut [u8]) -> io::Result<()> {
         while !buf.is_empty() {
-            let n = self.read_at(offset, buf).await?;
-            offset += n as u64;
-            buf = &mut buf[n..];
+            match self.read_at(offset, buf).await? {
+                0 => break,
+                n => {
+                    offset += n as u64;
+                    buf = &mut buf[n..];
+                }
+            }
         }
-        Ok(())
+        if !buf.is_empty() {
+            Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "failed to fill whole buffer",
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     /// Returns the length of the resource, in bytes
