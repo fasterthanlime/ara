@@ -69,6 +69,20 @@ where
     }
 }
 
+#[async_trait(?Send)]
+impl<'a, T> ReadAt for Box<T>
+where
+    T: ReadAt,
+{
+    async fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
+        Ok(self.as_ref().read_at(offset, buf).await?)
+    }
+
+    fn len(&self) -> u64 {
+        self.as_ref().len()
+    }
+}
+
 /// Type that can be converted into an `AsyncReadAt`.
 pub trait AsAsyncReadAt {
     type Out: ReadAt;
