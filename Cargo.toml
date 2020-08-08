@@ -1,10 +1,15 @@
 [package]
 name = "ara"
 version = "0.1.0"
-description = "Async random access I/O traits"
-license = "Apache-2.0 OR MIT"
 authors = ["Amos Wenger <amoswenger@gmail.com>"]
 edition = "2018"
+description = "Async random access I/O traits"
+repository = "https://github.com/fasterthanlime/ara"
+readme = "README.md"
+license = "Apache-2.0 OR MIT"
+
+keywords = ["io", "async"]
+categories = ["asynchronous"]
 
 [dependencies]
 async-trait = "0.1.36"
