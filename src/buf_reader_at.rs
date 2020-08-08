@@ -373,7 +373,7 @@ mod buf_reader_at_tests {
                 .await
                 .unwrap();
 
-            assert_eq!(buf_expect, buf_actual);
+            assert_eq!(&buf_expect[..], &buf_actual[..]);
         }
 
         let stats = buf_read.stats();
